@@ -1,0 +1,15 @@
+# ignore .asv files
+*.asv
+
+# Ignore the idea folder for python and vscode workspaces
+.idea/
+.vscode/
+
+# Ignore generated cpython functions
+*.pyc
+
+# Ignore figures
+*.pdf
+
+# ignore .log files
+*.log
