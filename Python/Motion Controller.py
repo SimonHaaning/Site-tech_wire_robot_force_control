@@ -6,9 +6,6 @@ import Threads
 from Python_Functions.TrajectoryGenerationFunctions import trajectory_generation
 from Python_Functions.KinematicsFunctions import inverse_wire_kinematics
 from Python_Functions.DynamicsFunctions import inverse_wire_dynamics
-from Python_Functions.RobotMotionSimulator import RobotMotionSimulator
-from Python_Functions.PlotterFunctions import wire_vel_plotter, motor_force_plotter
-import csv
 
 # Anchor positions static frame (m)
 a1 = [0.0, 3.355, -0.20646]
@@ -30,7 +27,6 @@ ANGLE_OFFSET = -0.12  # Frame angle offset measured by IMU
 # Inputs
 # Boundary X 1.00 -> 2.00
 # Boundary y 1.00 -> 2.00
-test_nr = '11'
 START_STATE = np.array([[1.44, 0.0, 0.0],
                         [1.20, 0.0, 0.0],
                         [0, 0.0, 0.0]])
@@ -42,9 +38,6 @@ FINAL_STATE = np.array([[1.15, 0.0, 0.0],
 GOAL_TOLERANCE = np.array([[0.1, 0.001, 0.001],
                            [0.1, 0.001, 0.001],
                            [0.1, 0.001, 0.001]])
-
-# Create object for robot simulation
-sim = RobotMotionSimulator(START_STATE, ANCHORS_POS, MOTORS_POS)
 
 # Parameters for trajectory generation
 ACCELERATION_LIMITS = np.array([0.01, 0.01, 0.001])
@@ -124,21 +117,6 @@ pos_estimator_active_flag = threading.Event()  # Active flag for the state estim
 sender_active_flag = threading.Event()  # Active flag for the force sender
 motion_controller_active_flag = threading.Event()  # Active flag for the main planning loop
 
-# Data lists for logging
-log_current_state = []
-log_motor_forces = []
-log_wire_vel = []
-
-
-# Logger function
-def logger_function(filename: str, data_list: list):
-    with open('test_data/'+filename+'.csv', 'w', newline='') as file:
-        writer = csv.writer(file)
-
-        # Write data to file each index becomes a row
-        for row in data_list:
-            writer.writerow(row)
-
 
 # Create IMU threads
 imu1_receiver_thread = threading.Thread(target=Threads.receive_imu_data,
@@ -186,8 +164,7 @@ estimate_current_state_thread = threading.Thread(target=Threads.estimate_current
                                                        ESTIMATION_LOWPASS,
                                                        ANCHORS_POS,
                                                        MOTORS_POS_ROTATED,
-                                                       ANGLE_OFFSET,
-                                                       log_current_state))
+                                                       ANGLE_OFFSET))
 estimate_current_state_thread.daemon = True  # Allow sending thread to exit when code stops
 estimate_current_state_thread.start()
 
@@ -200,107 +177,71 @@ send_motor_forces_thread = threading.Thread(target=Threads.send_motor_forces,
                                                   motor_force_lock,
                                                   wifi_lock,
                                                   sender_active_flag,
-                                                  motion_controller_active_flag,
-                                                  log_motor_forces,
-                                                  log_wire_vel))
+                                                  motion_controller_active_flag))
 send_motor_forces_thread.daemon = True  # Allow sending thread to exit when code stops
 send_motor_forces_thread.start()
 
 # Initialise iteration counter for control loop
 iterations = MAX_ITERATIONS + 1
 
-# Catch keyboard interrupt
-try:
-    # Main control loop
-    while True:
-        while not sender_active_flag.is_set() or not pos_estimator_active_flag.is_set():
-            motion_controller_active_flag.clear()
-            time.sleep(1)
+# Main control loop
+while True:
+    while not sender_active_flag.is_set() or not pos_estimator_active_flag.is_set():
+        motion_controller_active_flag.clear()
+        time.sleep(1)
 
-        # Get current state from sensor reading
-        current_state_lock.acquire()
-        current_state = current_state_mutable[0]
-        current_state_lock.release()
+    # Get current state from sensor reading
+    current_state_lock.acquire()
+    current_state = current_state_mutable[0]
+    current_state_lock.release()
 
-        # Check if goal is reached
-        if np.all(abs(np.subtract(FINAL_STATE, current_state)) <= GOAL_TOLERANCE):
-            print(f"\n\nGOAL REACHED")
-            debug_state_message(current_state)
-            break
-
-        # Compute trajectory
-        position, velocity, acceleration, times_new = trajectory_generation(current_state,
-                                                                            FINAL_STATE,
-                                                                            TIME_RESOLUTION,
-                                                                            ACCELERATION_LIMITS)
-
-        # Compute forces
-        frame_forces_motion = np.multiply(np.array([MASS_FRAME, MASS_FRAME, INERTIA_FRAME])[:, np.newaxis],
-                                          acceleration).transpose()
-        frame_forces_all = np.subtract(frame_forces_motion, FORCE_GRAVITY)
-
-        # Shape the array for kinematics
-        com_positions = np.concatenate((position[:2, :], np.zeros_like(position[0, :][np.newaxis, :])),
-                                       axis=0).transpose()
-        angles = position[2, :]
-
-        # Compute wire directions along trajectory
-        wire_dirs, wire_len, moment_arms = inverse_wire_kinematics(com_positions, angles, ANCHORS_POS, MOTORS_POS_ROTATED)
-
-        # Compute changes in wire lengths
-        wire_vel_new = np.diff(wire_len, axis=0)
-
-        # Compute motor forces
-        motor_forces_new, f_frame, _, iterations, err, _ = inverse_wire_dynamics(frame_forces_all[:FORCES_SEND_BATCH_SIZE],
-                                                                                 wire_dirs[:FORCES_SEND_BATCH_SIZE],
-                                                                                 moment_arms[:FORCES_SEND_BATCH_SIZE],
-                                                                                 max_iter=MAX_ITERATIONS,
-                                                                                 wire_forces_min=MIN_WIRE_FORCE,
-                                                                                 wire_forces_max=MAX_WIRE_FORCE,
-                                                                                 initial_wire_force=MIN_WIRE_FORCE)
-
-        needed_forces = np.where(wire_vel_new[:FORCES_SEND_BATCH_SIZE][:, :, np.newaxis] > -1e-6, 0, motor_forces_new)
-
-        # If trajectory is feasible update the result
-        if iterations <= MAX_ITERATIONS:
-            # print(f"Successfully computed new motor forces after {iterations} iterations")
-            times = times_new
-            # print(f'Expected to complete in {times[-1]} seconds')
-
-            # print(f'{time.time()}->Max motor force: {np.max(motor_forces_new, axis=0).transpose()[0]}')
-            # print(f'{time.time()}->Wire velocities: {np.mean(wire_vel_new, axis=0)}')
-
-        else:
-            # print(f"Error: Maximum iterations reached, could not converge")
-            pass
-
-        # Update motor forces
-        motor_force_lock.acquire()
-        motor_forces[0] = np.reshape(motor_forces_new, (FORCES_SEND_BATCH_SIZE * 5,))
-        wire_vel[0] = np.reshape(wire_vel_new[:FORCES_SEND_BATCH_SIZE], (FORCES_SEND_BATCH_SIZE * 5))
-        motor_force_lock.release()
-        motion_controller_active_flag.set()
-        # Simulate robot motion
-        # sim.simulate_motion(motor_forces[:FORCES_SEND_BATCH_SIZE], times[:FORCES_SEND_BATCH_SIZE])  # Simulate motion
-
-        # DEBUG
+    # Check if goal is reached
+    if np.all(abs(np.subtract(FINAL_STATE, current_state)) <= GOAL_TOLERANCE):
+        print(f"\n\nGOAL REACHED")
         debug_state_message(current_state)
-        print(f'Motor forces after {iterations} iterations:\n{motor_forces_new[0].transpose()}')
-        print(f'Wire velocities:\n{wire_vel_new[0]}')
-        # print(f'Maximum errors:\n{np.max(err, axis=0).transpose()}')
-        # print(f'Average frame forces:\n{np.mean(f_frame, axis=0).transpose()}')
-        # wire_vel_plotter(wire_vel_new[:100], times_new[:101])
-        # motor_force_plotter(needed_forces, times_new[:100])
+        break
 
-except KeyboardInterrupt as e:
-    pass
+    # Compute trajectory
+    position, velocity, acceleration, times_new = trajectory_generation(current_state,
+                                                                        FINAL_STATE,
+                                                                        TIME_RESOLUTION,
+                                                                        ACCELERATION_LIMITS)
 
-finally:
-    # Log data to files
-    folder = 'motion_tests/' + test_nr + '/'
-    logger_function(folder+'target_pos', [FINAL_STATE])
-    logger_function(folder+'current_state', log_current_state)
-    logger_function(folder+'motor_forces', log_motor_forces)
-    logger_function(folder+'wire_vel', log_wire_vel)
+    # Compute forces
+    frame_forces_motion = np.multiply(np.array([MASS_FRAME, MASS_FRAME, INERTIA_FRAME])[:, np.newaxis],
+                                      acceleration).transpose()
+    frame_forces_all = np.subtract(frame_forces_motion, FORCE_GRAVITY)
 
-    exit(0)
+    # Shape the array for kinematics
+    com_positions = np.concatenate((position[:2, :], np.zeros_like(position[0, :][np.newaxis, :])),
+                                   axis=0).transpose()
+    angles = position[2, :]
+
+    # Compute wire directions along trajectory
+    wire_dirs, wire_len, moment_arms = inverse_wire_kinematics(com_positions, angles, ANCHORS_POS, MOTORS_POS_ROTATED)
+
+    # Compute changes in wire lengths
+    wire_vel_new = np.diff(wire_len, axis=0)
+
+    # Compute motor forces
+    motor_forces_new, f_frame, _, iterations, err, _ = inverse_wire_dynamics(frame_forces_all[:FORCES_SEND_BATCH_SIZE],
+                                                                             wire_dirs[:FORCES_SEND_BATCH_SIZE],
+                                                                             moment_arms[:FORCES_SEND_BATCH_SIZE],
+                                                                             max_iter=MAX_ITERATIONS,
+                                                                             wire_forces_min=MIN_WIRE_FORCE,
+                                                                             wire_forces_max=MAX_WIRE_FORCE,
+                                                                             initial_wire_force=MIN_WIRE_FORCE)
+
+    needed_forces = np.where(wire_vel_new[:FORCES_SEND_BATCH_SIZE][:, :, np.newaxis] > -1e-6, 0, motor_forces_new)
+
+    # Update motor forces
+    motor_force_lock.acquire()
+    motor_forces[0] = np.reshape(motor_forces_new, (FORCES_SEND_BATCH_SIZE * 5,))
+    wire_vel[0] = np.reshape(wire_vel_new[:FORCES_SEND_BATCH_SIZE], (FORCES_SEND_BATCH_SIZE * 5))
+    motor_force_lock.release()
+    motion_controller_active_flag.set()
+
+    # DEBUG
+    debug_state_message(current_state)
+    print(f'Motor forces after {iterations} iterations:\n{motor_forces_new[0].transpose()}')
+    print(f'Wire velocities:\n{wire_vel_new[0]}')
