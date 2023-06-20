@@ -13,10 +13,6 @@ const int led_pin = 2;
 // Buffer to receive the bytes sent by the server
 const int buffer_size = 10;
 uint8_t buffer[sizeof(float) * buffer_size];
-uint8_t byteArray[sizeof(float) * buffer_size];
-
-// Motor forces
-float motor_forces[buffer_size];
 
 // Timing
 const int sampling_interval = 1000;  // Sampling interval in ms
@@ -70,35 +66,13 @@ void loop() {
       Serial.print(1000/(float(current_time)-float(last_time)), 5);
       Serial.println(" Hz");
       last_time = current_time;
+
       // Read bytes sent from server and store in buffer
       size_t len = client.readBytes(buffer, sizeof(buffer));
-      //client.flush();
-
-      // Convert the bytes to a list of float values
-      for (int i = 0; i < buffer_size; i++) {
-        motor_forces[i] = *((float*) (buffer + i * sizeof(float)));
-      }
       
-      Serial.println("Received data: ");
-      for (int j = 0; j < buffer_size/10; j++){
-        for (int i = 0; i < 5; i++){
-          Serial.print(motor_forces[i+j*5], 2);
-          Serial.print("\t");
-          Serial.print(motor_forces[i+int(buffer_size/2)+j*5], 6);
-          Serial.print("\t");
-        }
-        Serial.println();
-      }
-      
-      
-      
-
-      // Prepare byte array for serial transmit
-      //memcpy(byteArray, motor_forces, sizeof(byteArray));
-      //Serial2.write(byteArray, sizeof(byteArray));
+      // Retransmit data over serial
       Serial2.write(buffer, sizeof(buffer));
       Serial2.flush();
-      //Serial.println("Sent data");
     }
   }
   Serial.println("Lost connection to server");
