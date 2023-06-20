@@ -114,8 +114,7 @@ def estimate_current_state(input_mutable,
                            max_len_lowpass,
                            anchors_pos,
                            motor_pos_rotated,
-                           angle_offset,
-                           log_data):
+                           angle_offset):
     lp_filter = ExponentialLowPassFilter([0.1, 0.01, 0.01])
     last_before_filter = 0
     positions = np.zeros((max_len_lowpass, 3))  # Circular buffer for positional measurements
@@ -188,7 +187,6 @@ def estimate_current_state(input_mutable,
         try:
             result_data_lock.acquire()
             result_mutable[0] = lowpass_current_state
-            log_data.append(result_mutable[0])
         finally:
             result_data_lock.release()  # Ensure the data lock is released
         active_status.set()  # Inform the system the state estimator is running
@@ -207,9 +205,7 @@ def send_motor_forces(motor_forces_to_send,
                       data_lock: threading.Lock(),
                       conn_lock: threading.Lock(),
                       active_status: threading.Event(),
-                      forces_ready: threading.Event(),
-                      log_data_forces,
-                      log_data_vels):
+                      forces_ready: threading.Event()):
     conn = None
 
     while True:  # not stop_flag.is_set():
@@ -252,8 +248,6 @@ def send_motor_forces(motor_forces_to_send,
 
                     try:
                         conn.sendall(msg_bytes)  # Send motor forces
-                        log_data_forces.append(motor_forces_to_send[0])
-                        log_data_vels.append(wire_vel_to_send[0])
                     except (ConnectionResetError, ConnectionAbortedError):
                         # The motor controller disconnected while forces were being sent
                         print('Lost connection while sending to motor controller')
