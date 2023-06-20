@@ -1,5 +1,6 @@
 
-#define WIRE_NR 9  // Wire number (change when uploading code to ESP connected to second IMU)
+#define WIRE_NR 9 // Wire number (change when uploading code to ESP connected to second IMU)
+                  // Nr. 1 and 3 for wires and any other number for frame angle
 
 #include <WiFi.h>
 #include <WiFiClient.h>
@@ -184,8 +185,7 @@ void loop() {
       Serial.print(1000 / (float(current_time) - float(last_sample_time)), 5);
       Serial.println(" Hz");
       last_sample_time = current_time;
-      // if programming failed, don't try to do anything
-      if (!dmpReady) return;
+
       if (mpu.dmpGetCurrentFIFOPacket(fifoBuffer)) {  // Get the Latest packet
         // Update gravity vector with newest measurement
         mpu.dmpGetQuaternion(&q, fifoBuffer);
