@@ -9,7 +9,7 @@
 *.pyc
 
 # Ignore figures
-*.pdf
+#*.pdf
 
 # ignore .log files
 *.log
